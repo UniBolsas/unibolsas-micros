@@ -15,11 +15,15 @@ from bs4 import BeautifulSoup
 from pypdf import PdfReader
 
 from shared.models import Edital
+from shared.urls import FUNCAP_URL
 
-FUNCAP_EDITAIS_URL = "http://montenegro.funcap.ce.gov.br/sugba/editais/"
 DATE_RE = re.compile(r"\b(\d{1,2}/\d{1,2}/\d{4})\b")
 KEYWORDS = ("encerr", "prazo", "final", "inscri", "submiss", "data limite")
-NEGATIVE_HINTS = ("anteriores", "meses anteriores", "últimos 12 meses", "ultimos 12 meses")
+NEGATIVE_HINTS = (
+    "anteriores",
+    "meses anteriores",
+    "últimos 12 meses",
+    "ultimos 12 meses")
 
 
 def _build_id(url: str) -> str:
@@ -93,7 +97,8 @@ def extract_end_date_from_pdf(pdf_bytes: bytes) -> tuple[str | None, str | None]
 
 def parse_funcap_open_editais(html: str) -> list[Edital]:
     soup = BeautifulSoup(html, "lxml")
-    start_header = soup.find(string=lambda s: isinstance(s, str) and "Editais Abertos" in s)
+    start_header = soup.find(string=lambda s: isinstance(s, str)
+                             and "Editais Abertos" in s)
     if start_header is None:
         return []
 
@@ -108,7 +113,7 @@ def parse_funcap_open_editais(html: str) -> list[Edital]:
 
     for node in panel.find_all("a"):
         raw_url = (node.get("href") or "").strip()
-        abs_url = urljoin(FUNCAP_EDITAIS_URL, raw_url)
+        abs_url = urljoin(FUNCAP_URL, raw_url)
         link_text = " ".join(node.get_text(" ", strip=True).split())
         low_link = link_text.lower()
 
@@ -124,7 +129,8 @@ def parse_funcap_open_editais(html: str) -> list[Edital]:
 
         # Section <b> header is always more complete than the link text
         header_tag = node.find_previous("b")
-        header_text = " ".join(header_tag.get_text(" ", strip=True).split()) if header_tag else ""
+        header_text = " ".join(header_tag.get_text(
+            " ", strip=True).split()) if header_tag else ""
         nome = (header_text or link_text).upper()
 
         seen_urls.add(abs_url)
@@ -133,7 +139,7 @@ def parse_funcap_open_editais(html: str) -> list[Edital]:
                 id=_build_id(abs_url),
                 nome=nome,
                 url_pdf=abs_url,
-                fonte=FUNCAP_EDITAIS_URL,
+                fonte=FUNCAP_URL,
                 status="aberto",
                 capturado_em=captured_at,
             )
@@ -143,7 +149,7 @@ def parse_funcap_open_editais(html: str) -> list[Edital]:
 
 
 def run(output_path: Path) -> int:
-    html = fetch_html(FUNCAP_EDITAIS_URL)
+    html = fetch_html(FUNCAP_URL)
     editais = parse_funcap_open_editais(html)
     # TODO: extração de data_encerramento via PDF está retornando datas incorretas
     # (ex: "resultado final" e "prazo de recursos" em vez do prazo de inscrição).
