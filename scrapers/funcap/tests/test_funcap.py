@@ -16,6 +16,6 @@ def test_parse_funcap_open_editais_filters_only_open_edital_pdfs() -> None:
     result = parse_funcap_open_editais(html)
 
     assert len(result) == 1
-    assert result[0].nome == "Edital No 08/2025"
+    assert result[0].nome == "EDITAL NO 08/2025"
     assert result[0].status == "aberto"
     assert result[0].url_pdf.endswith("/edital/768.pdf")

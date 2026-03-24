@@ -5,7 +5,7 @@ import json
 import re
 from dataclasses import asdict
 from datetime import date as date_type
-from datetime import datetime
+from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
 from urllib.parse import urljoin
@@ -18,12 +18,22 @@ from shared.models import Edital
 from shared.urls import FUNCAP_URL
 
 DATE_RE = re.compile(r"\b(\d{1,2}/\d{1,2}/\d{4})\b")
-KEYWORDS = ("encerr", "prazo", "final", "inscri", "submiss", "data limite")
+
+KEYWORDS_HIGH = ("inscri", "submiss", "data limite", "encerr")
+KEYWORDS_LOW = ("prazo", "final")
+
 NEGATIVE_HINTS = (
     "anteriores",
     "meses anteriores",
     "últimos 12 meses",
-    "ultimos 12 meses")
+    "ultimos 12 meses",
+    "resultado",
+    "recurso",
+    "homologaç",
+    "divulgaç",
+    "publicaç",
+    "julgament",
+)
 
 
 def _build_id(url: str) -> str:
@@ -58,41 +68,35 @@ def extract_end_date_from_pdf(pdf_bytes: bytes) -> tuple[str | None, str | None]
     except Exception:
         return None, None
 
-    today = datetime.utcnow().date()
+    today = datetime.now(UTC).date()
 
     lines: list[str] = []
     for page in reader.pages:
         text = page.extract_text() or ""
         lines.extend(line.strip() for line in text.splitlines() if line.strip())
 
-    # First pass: prefer earliest future date from a keyword-matching line.
-    # Second pass: fall back to the latest past date if no future date found.
-    best_future: tuple[str, str] | None = None
-    best_past: tuple[str, str] | None = None
+    def _scan(keyword_set: tuple[str, ...]) -> tuple[str, str] | None:
+        best_future: tuple[str, str] | None = None
+        for line in lines:
+            low = line.lower()
+            if any(h in low for h in NEGATIVE_HINTS):
+                continue
+            if not any(k in low for k in keyword_set):
+                continue
+            all_dates = DATE_RE.findall(line)
+            if not all_dates:
+                continue
+            iso = _normalize_date(all_dates[-1])
+            if not iso:
+                continue
+            parsed = date_type.fromisoformat(iso)
+            if parsed >= today:
+                if best_future is None or iso < best_future[0]:
+                    best_future = (iso, line[:240])
+        return best_future
 
-    for line in lines:
-        low = line.lower()
-        if any(h in low for h in NEGATIVE_HINTS):
-            continue
-        if not any(k in low for k in KEYWORDS):
-            continue
-        # When a table row has Início/Término columns, take the last date (Término)
-        all_dates = DATE_RE.findall(line)
-        if not all_dates:
-            continue
-        iso = _normalize_date(all_dates[-1])
-        if not iso:
-            continue
-        parsed = date_type.fromisoformat(iso)
-        if parsed >= today:
-            if best_future is None or iso < best_future[0]:
-                best_future = (iso, line[:240])
-        else:
-            if best_past is None or iso > best_past[0]:
-                best_past = (iso, line[:240])
-
-    result = best_future or best_past
-    return (result[0], result[1]) if result else (None, None)
+    found = _scan(KEYWORDS_HIGH) or _scan(KEYWORDS_LOW)
+    return (found[0], found[1]) if found else (None, None)
 
 
 def parse_funcap_open_editais(html: str) -> list[Edital]:
@@ -127,7 +131,6 @@ def parse_funcap_open_editais(html: str) -> list[Edital]:
         ):
             continue
 
-        # Section <b> header is always more complete than the link text
         header_tag = node.find_previous("b")
         header_text = " ".join(header_tag.get_text(
             " ", strip=True).split()) if header_tag else ""
@@ -139,7 +142,7 @@ def parse_funcap_open_editais(html: str) -> list[Edital]:
                 id=_build_id(abs_url),
                 nome=nome,
                 url_pdf=abs_url,
-                fonte=FUNCAP_URL,
+                instituicao="FUNCAP",
                 status="aberto",
                 capturado_em=captured_at,
             )
@@ -151,18 +154,15 @@ def parse_funcap_open_editais(html: str) -> list[Edital]:
 def run(output_path: Path) -> int:
     html = fetch_html(FUNCAP_URL)
     editais = parse_funcap_open_editais(html)
-    # TODO: extração de data_encerramento via PDF está retornando datas incorretas
-    # (ex: "resultado final" e "prazo de recursos" em vez do prazo de inscrição).
-    # Desabilitado até definir estratégia de extração mais confiável.
-    # for edital in editais:
-    #     try:
-    #         pdf_bytes = fetch_pdf_bytes(edital.url_pdf)
-    #         data_encerramento, contexto = extract_end_date_from_pdf(pdf_bytes)
-    #         edital.data_encerramento = data_encerramento
-    #         edital.contexto_data_encerramento = contexto
-    #     except Exception:
-    #         edital.data_encerramento = None
-    #         edital.contexto_data_encerramento = None
+    for edital in editais:
+        try:
+            pdf_bytes = fetch_pdf_bytes(edital.url_pdf)
+            data_encerramento, contexto = extract_end_date_from_pdf(pdf_bytes)
+            edital.data_encerramento = data_encerramento
+            edital.contexto_data_encerramento = contexto
+        except Exception:
+            edital.data_encerramento = None
+            edital.contexto_data_encerramento = None
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
