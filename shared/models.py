@@ -15,8 +15,8 @@ class Edital:
         instituicao: Nome da instituição responsável.
         status: Status atual do edital (e.g. "aberto", "encerrado").
         capturado_em: Data e hora em que o edital foi capturado.
-        data_encerramento: Data limite para inscrições, se disponível.
-        contexto_data_encerramento: Trecho ou contexto de onde a data de
+        data_encerramento_inscricao: Data limite para inscrições, se disponível.
+        contexto_data_encerramento_inscricao: Trecho ou contexto de onde a data de
             encerramento foi extraída.
     """
 
@@ -26,8 +26,8 @@ class Edital:
     instituicao: str
     status: str
     capturado_em: datetime
-    data_encerramento: datetime | None = None
-    contexto_data_encerramento: str | None = None
+    data_encerramento_inscricao: datetime | None = None
+    contexto_data_encerramento_inscricao: str | None = None
 
     @staticmethod
     def now_iso() -> str:
