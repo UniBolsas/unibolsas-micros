@@ -154,15 +154,16 @@ def parse_funcap_open_editais(html: str) -> list[Edital]:
 def run(output_path: Path) -> int:
     html = fetch_html(FUNCAP_URL)
     editais = parse_funcap_open_editais(html)
+    # TODO: paralelizar downloads de PDF (ThreadPoolExecutor) para reduzir tempo de scraping
     for edital in editais:
         try:
             pdf_bytes = fetch_pdf_bytes(edital.url_pdf)
-            data_encerramento, contexto = extract_end_date_from_pdf(pdf_bytes)
-            edital.data_encerramento = data_encerramento
-            edital.contexto_data_encerramento = contexto
+            data_encerramento_inscricao, contexto = extract_end_date_from_pdf(pdf_bytes)
+            edital.data_encerramento_inscricao = data_encerramento_inscricao
+            edital.contexto_data_encerramento_inscricao = contexto
         except Exception:
-            edital.data_encerramento = None
-            edital.contexto_data_encerramento = None
+            edital.data_encerramento_inscricao = None
+            edital.contexto_data_encerramento_inscricao = None
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
