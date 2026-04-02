@@ -10,24 +10,24 @@ class Edital:
 
     Attributes:
         id: Identificador único do edital.
-        nome: Nome ou título do edital.
-        url_pdf: URL para o PDF do edital.
-        instituicao: Nome da instituição responsável.
+        title: Nome ou título do edital.
+        pdf_url: URL para o PDF do edital.
+        institution: Nome da instituição responsável.
         status: Status atual do edital (e.g. "aberto", "encerrado").
-        capturado_em: Data e hora em que o edital foi capturado.
-        data_encerramento_inscricao: Data limite para inscrições, se disponível.
-        contexto_data_encerramento_inscricao: Trecho ou contexto de onde a data de
+        captured_at: Data e hora em que o edital foi capturado.
+        registration_deadline: Data limite para inscrições, se disponível.
+        registration_deadline_context: Trecho ou contexto de onde a data de
             encerramento foi extraída.
     """
 
     id: str
-    nome: str
-    url_pdf: str
-    instituicao: str
+    title: str
+    pdf_url: str
+    institution: str
     status: str
-    capturado_em: datetime
-    data_encerramento_inscricao: datetime | None = None
-    contexto_data_encerramento_inscricao: str | None = None
+    captured_at: datetime
+    registration_deadline: datetime | None = None
+    registration_deadline_context: str | None = None
 
     @staticmethod
     def now_iso() -> str:

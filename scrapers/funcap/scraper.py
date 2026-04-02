@@ -134,17 +134,17 @@ def parse_funcap_open_editais(html: str) -> list[Edital]:
         header_tag = node.find_previous("b")
         header_text = " ".join(header_tag.get_text(
             " ", strip=True).split()) if header_tag else ""
-        nome = (header_text or link_text).upper()
+        title = (header_text or link_text).upper()
 
         seen_urls.add(abs_url)
         editais.append(
             Edital(
                 id=_build_id(abs_url),
-                nome=nome,
-                url_pdf=abs_url,
-                instituicao="FUNCAP",
+                title=title,
+                pdf_url=abs_url,
+                institution="FUNCAP",
                 status="aberto",
-                capturado_em=captured_at,
+                captured_at=captured_at,
             )
         )
 
@@ -157,13 +157,13 @@ def run(output_path: Path) -> int:
     # TODO: paralelizar downloads de PDF (ThreadPoolExecutor) para reduzir tempo de scraping
     for edital in editais:
         try:
-            pdf_bytes = fetch_pdf_bytes(edital.url_pdf)
-            data_encerramento_inscricao, contexto = extract_end_date_from_pdf(pdf_bytes)
-            edital.data_encerramento_inscricao = data_encerramento_inscricao
-            edital.contexto_data_encerramento_inscricao = contexto
+            pdf_bytes = fetch_pdf_bytes(edital.pdf_url)
+            registration_deadline, context = extract_end_date_from_pdf(pdf_bytes)
+            edital.registration_deadline = registration_deadline
+            edital.registration_deadline_context = context
         except Exception:
-            edital.data_encerramento_inscricao = None
-            edital.contexto_data_encerramento_inscricao = None
+            edital.registration_deadline = None
+            edital.registration_deadline_context = None
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
