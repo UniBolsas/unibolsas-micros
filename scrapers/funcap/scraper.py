@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
-from dataclasses import asdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import asdict, dataclass
 from datetime import date as date_type
 from datetime import UTC, datetime
 from io import BytesIO
@@ -14,8 +16,13 @@ import httpx
 from bs4 import BeautifulSoup
 from pypdf import PdfReader
 
+from shared.db import EditaisRepository, ScrapeRunsRepository
 from shared.models import Edital
 from shared.urls import FUNCAP_URL
+
+logger = logging.getLogger("unibolsas.scraper.funcap")
+INSTITUTION = "funcap"
+PDF_WORKERS = 8
 
 DATE_RE = re.compile(r"\b(\d{1,2}/\d{1,2}/\d{4})\b")
 
@@ -149,6 +156,107 @@ def parse_funcap_open_editais(html: str) -> list[Edital]:
         )
 
     return editais
+
+
+def _enrich_edital(edital: Edital) -> Edital:
+    try:
+        pdf_bytes = fetch_pdf_bytes(edital.pdf_url)
+        deadline, context = extract_end_date_from_pdf(pdf_bytes)
+        edital.registration_deadline = deadline
+        edital.registration_deadline_context = context
+    except Exception as exc:
+        logger.warning("Falha ao baixar/parsear PDF %s: %s", edital.pdf_url, exc)
+        edital.registration_deadline = None
+        edital.registration_deadline_context = None
+    return edital
+
+
+@dataclass(slots=True)
+class RunResult:
+    status: str
+    total_found: int
+    new_inserted: int
+    updated: int
+    skipped_cached: int
+    listing_hash: str
+
+
+def _listing_hash(editais: list[Edital]) -> str:
+    joined = "\n".join(sorted(e.id for e in editais))
+    return hashlib.sha1(joined.encode("utf-8")).hexdigest()
+
+
+def run_and_persist() -> RunResult:
+    """Executa o scraping da FUNCAP e persiste no MongoDB de forma idempotente."""
+    runs_repo = ScrapeRunsRepository()
+    editais_repo = EditaisRepository(INSTITUTION)
+    run_id = runs_repo.start(INSTITUTION)
+    logger.info("FUNCAP scrape iniciado run_id=%s", run_id)
+
+    try:
+        html = fetch_html(FUNCAP_URL)
+        editais = parse_funcap_open_editais(html)
+        total_found = len(editais)
+        listing_hash = _listing_hash(editais)
+        logger.info("FUNCAP encontrou %d editais (hash=%s)", total_found, listing_hash[:8])
+
+        last = runs_repo.get_last(INSTITUTION)
+        all_ids = [e.id for e in editais]
+        existing_complete = editais_repo.get_existing_complete_ids(all_ids)
+
+        unchanged = (
+            last is not None
+            and last.get("listing_hash") == listing_hash
+            and len(existing_complete) == total_found
+        )
+
+        if unchanged:
+            logger.info("FUNCAP sem mudanças, pulando download de PDFs")
+            runs_repo.finish(
+                run_id,
+                status="unchanged",
+                listing_hash=listing_hash,
+                total_found=total_found,
+                new_inserted=0,
+                updated=0,
+                skipped_cached=total_found,
+            )
+            return RunResult("unchanged", total_found, 0, 0, total_found, listing_hash)
+
+        to_fetch = [e for e in editais if e.id not in existing_complete]
+        logger.info("FUNCAP baixando %d PDFs (cache: %d)", len(to_fetch), len(existing_complete))
+
+        with ThreadPoolExecutor(max_workers=PDF_WORKERS) as pool:
+            futures = {pool.submit(_enrich_edital, e): e for e in to_fetch}
+            for future in as_completed(futures):
+                future.result()
+
+        stats = editais_repo.upsert_many(editais)
+        runs_repo.finish(
+            run_id,
+            status="ok",
+            listing_hash=listing_hash,
+            total_found=total_found,
+            new_inserted=stats.inserted,
+            updated=stats.updated,
+            skipped_cached=len(existing_complete),
+        )
+        logger.info(
+            "FUNCAP run_id=%s ok inserted=%d updated=%d cached=%d",
+            run_id, stats.inserted, stats.updated, len(existing_complete),
+        )
+        return RunResult(
+            "ok", total_found, stats.inserted, stats.updated,
+            len(existing_complete), listing_hash,
+        )
+    except Exception as exc:
+        logger.exception("FUNCAP run_id=%s falhou", run_id)
+        runs_repo.finish(
+            run_id,
+            status="error",
+            error={"type": type(exc).__name__, "message": str(exc)},
+        )
+        raise
 
 
 def run(output_path: Path) -> int:
