@@ -10,14 +10,15 @@ from __future__ import annotations
 
 from typing import Callable
 
+from scrapers.cnpq.scraper import run_and_persist as cnpq_run
 from scrapers.funcap.scraper import run_and_persist as funcap_run
 
 ScraperFn = Callable[[], object]
 
 SCRAPERS: dict[str, ScraperFn] = {
     "funcap": funcap_run,
+    "cnpq": cnpq_run,
     # "capes": capes_run,
-    # "cnpq": cnpq_run,
 }
 
 
