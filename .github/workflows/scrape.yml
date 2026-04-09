@@ -1,0 +1,24 @@
+name: scrape
+
+on:
+  schedule:
+    # Todo dia a cada 6h (UTC). Ajuste se quiser outra frequência.
+    - cron: "0 */6 * * *"
+  workflow_dispatch: # permite disparo manual pela aba Actions
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger all scrapers
+        env:
+          SCRAPE_URL: ${{ vars.SCRAPE_URL }}
+          SCRAPE_TOKEN: ${{ secrets.SCRAPE_TOKEN }}
+        run: |
+          if [ -z "$SCRAPE_URL" ] || [ -z "$SCRAPE_TOKEN" ]; then
+            echo "SCRAPE_URL (repo variable) e SCRAPE_TOKEN (repo secret) devem estar configurados" >&2
+            exit 1
+          fi
+          curl -fsS -X POST "$SCRAPE_URL/scrape/run" \
+            -H "X-Scrape-Token: $SCRAPE_TOKEN" \
+            --max-time 60
