@@ -4,13 +4,13 @@ import hashlib
 import json
 import logging
 import re
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import asdict, dataclass
 from datetime import date as date_type
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
 from urllib.parse import urljoin
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import asdict
 
 import httpx
 from bs4 import BeautifulSoup
@@ -18,6 +18,7 @@ from pypdf import PdfReader
 
 from shared.db import EditaisRepository, ScrapeRunsRepository
 from shared.models import Edital
+from shared.scraping import RunResult, build_id, fetch_html, listing_hash
 from shared.urls import FUNCAP_URL
 
 logger = logging.getLogger("unibolsas.scraper.funcap")
@@ -41,18 +42,6 @@ NEGATIVE_HINTS = (
     "publicaç",
     "julgament",
 )
-
-
-def _build_id(url: str) -> str:
-    return hashlib.sha1(url.encode("utf-8")).hexdigest()[:12]
-
-
-def fetch_html(url: str) -> str:
-    with httpx.Client(timeout=30.0, follow_redirects=True) as client:
-        response = client.get(url, headers={"User-Agent": "Mozilla/5.0"})
-        response.raise_for_status()
-        response.encoding = "utf-8"
-        return response.text
 
 
 def fetch_pdf_bytes(url: str) -> bytes:
@@ -146,7 +135,7 @@ def parse_funcap_open_editais(html: str) -> list[Edital]:
         seen_urls.add(abs_url)
         editais.append(
             Edital(
-                id=_build_id(abs_url),
+                id=build_id(abs_url),
                 title=title,
                 pdf_url=abs_url,
                 institution="FUNCAP",
@@ -171,21 +160,6 @@ def _enrich_edital(edital: Edital) -> Edital:
     return edital
 
 
-@dataclass(slots=True)
-class RunResult:
-    status: str
-    total_found: int
-    new_inserted: int
-    updated: int
-    skipped_cached: int
-    listing_hash: str
-
-
-def _listing_hash(editais: list[Edital]) -> str:
-    joined = "\n".join(sorted(e.id for e in editais))
-    return hashlib.sha1(joined.encode("utf-8")).hexdigest()
-
-
 def run_and_persist() -> RunResult:
     """Executa o scraping da FUNCAP e persiste no MongoDB de forma idempotente."""
     runs_repo = ScrapeRunsRepository()
@@ -197,8 +171,8 @@ def run_and_persist() -> RunResult:
         html = fetch_html(FUNCAP_URL)
         editais = parse_funcap_open_editais(html)
         total_found = len(editais)
-        listing_hash = _listing_hash(editais)
-        logger.info("FUNCAP encontrou %d editais (hash=%s)", total_found, listing_hash[:8])
+        lhash = listing_hash(editais)
+        logger.info("FUNCAP encontrou %d editais (hash=%s)", total_found, lhash[:8])
 
         last = runs_repo.get_last(INSTITUTION)
         all_ids = [e.id for e in editais]
@@ -206,7 +180,7 @@ def run_and_persist() -> RunResult:
 
         unchanged = (
             last is not None
-            and last.get("listing_hash") == listing_hash
+            and last.get("listing_hash") == lhash
             and len(existing_complete) == total_found
         )
 
@@ -215,13 +189,13 @@ def run_and_persist() -> RunResult:
             runs_repo.finish(
                 run_id,
                 status="unchanged",
-                listing_hash=listing_hash,
+                listing_hash=lhash,
                 total_found=total_found,
                 new_inserted=0,
                 updated=0,
                 skipped_cached=total_found,
             )
-            return RunResult("unchanged", total_found, 0, 0, total_found, listing_hash)
+            return RunResult("unchanged", total_found, 0, 0, total_found, lhash)
 
         to_fetch = [e for e in editais if e.id not in existing_complete]
         logger.info("FUNCAP baixando %d PDFs (cache: %d)", len(to_fetch), len(existing_complete))
@@ -235,7 +209,7 @@ def run_and_persist() -> RunResult:
         runs_repo.finish(
             run_id,
             status="ok",
-            listing_hash=listing_hash,
+            listing_hash=lhash,
             total_found=total_found,
             new_inserted=stats.inserted,
             updated=stats.updated,
@@ -247,7 +221,7 @@ def run_and_persist() -> RunResult:
         )
         return RunResult(
             "ok", total_found, stats.inserted, stats.updated,
-            len(existing_complete), listing_hash,
+            len(existing_complete), lhash,
         )
     except Exception as exc:
         logger.exception("FUNCAP run_id=%s falhou", run_id)
@@ -262,7 +236,6 @@ def run_and_persist() -> RunResult:
 def run(output_path: Path) -> int:
     html = fetch_html(FUNCAP_URL)
     editais = parse_funcap_open_editais(html)
-    # TODO: paralelizar downloads de PDF (ThreadPoolExecutor) para reduzir tempo de scraping
     for edital in editais:
         try:
             pdf_bytes = fetch_pdf_bytes(edital.pdf_url)
