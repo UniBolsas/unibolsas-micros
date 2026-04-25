@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 from pathlib import Path
 
@@ -9,11 +11,23 @@ from bs4 import BeautifulSoup, Tag
 
 from shared.db import EditaisRepository, ScrapeRunsRepository
 from shared.models import Edital
+from shared.pdf import extract_end_date_from_pdf, fetch_pdf_bytes
 from shared.scraping import RunResult, build_id, fetch_html, listing_hash
 from shared.urls import CAPES_URL
 
 logger = logging.getLogger("unibolsas.scraper.capes")
 INSTITUTION = "capes"
+PDF_WORKERS = 8
+
+_PDF_POSITIVE = ("edital",)
+_PDF_NEGATIVE = (
+    "resultado", "lista", "relação", "relacao",
+    "renovação", "renovacao", "manual", "cartão", "cartao",
+    "anexo", "modelo", "declaração", "declaracao", "termo",
+    "retificação", "retificacao",
+)
+_RESULT_PATH = "/resultados-dos-editais/"
+_DATE_PREFIX_RE = re.compile(r"^(\d{2})(\d{2})(\d{4})_")
 
 
 def _find_row(tag: Tag) -> Tag | None:
@@ -80,6 +94,55 @@ def parse_capes_open_editais(html: str) -> list[Edital]:
     return editais
 
 
+def _find_edital_pdf_candidates(html: str) -> list[str]:
+    """Retorna URLs de PDFs de edital ordenadas da mais recente para a mais antiga."""
+    soup = BeautifulSoup(html, "lxml")
+    seen: set[str] = set()
+    candidates: list[tuple[str, str]] = []  # (sort_key, href)
+
+    for a in soup.find_all("a", href=True):
+        href = a["href"].strip()
+        if ".pdf" not in href.lower():
+            continue
+        if _RESULT_PATH in href:
+            continue
+        if href in seen:
+            continue
+
+        text = a.get_text(" ", strip=True).lower()
+        if not any(kw in text for kw in _PDF_POSITIVE):
+            continue
+        if any(kw in text for kw in _PDF_NEGATIVE):
+            continue
+
+        # Só deduplica após passar todos os filtros — um mesmo href pode aparecer
+        # primeiro com texto vazio e depois com texto válido no HTML.
+        seen.add(href)
+        fname = href.rsplit("/", 1)[-1]
+        m = _DATE_PREFIX_RE.match(fname)
+        sort_key = f"{m.group(3)}{m.group(2)}{m.group(1)}" if m else ""
+        candidates.append((sort_key, href))
+
+    candidates.sort(reverse=True)
+    return [href for _, href in candidates]
+
+
+def _enrich_edital(edital: Edital) -> Edital:
+    try:
+        page_html = fetch_html(edital.pdf_url)
+        candidates = _find_edital_pdf_candidates(page_html)
+        for pdf_url in candidates:
+            pdf_bytes = fetch_pdf_bytes(pdf_url)
+            deadline, context = extract_end_date_from_pdf(pdf_bytes)
+            if deadline is not None:
+                edital.registration_deadline = deadline
+                edital.registration_deadline_context = context
+                break
+    except Exception as exc:
+        logger.warning("Falha ao enriquecer %s: %s", edital.pdf_url, exc)
+    return edital
+
+
 def run_and_persist() -> RunResult:
     """Executa o scraping da CAPES e persiste no MongoDB de forma idempotente."""
     runs_repo = ScrapeRunsRepository()
@@ -105,7 +168,7 @@ def run_and_persist() -> RunResult:
         )
 
         if unchanged:
-            logger.info("CAPES sem mudanças, pulando persistência")
+            logger.info("CAPES sem mudanças, pulando download de PDFs")
             runs_repo.finish(
                 run_id,
                 status="unchanged",
@@ -116,6 +179,14 @@ def run_and_persist() -> RunResult:
                 skipped_cached=total_found,
             )
             return RunResult("unchanged", total_found, 0, 0, total_found, lhash)
+
+        to_fetch = [e for e in editais if e.id not in existing_complete]
+        logger.info("CAPES enriquecendo %d editais (cache: %d)", len(to_fetch), len(existing_complete))
+
+        with ThreadPoolExecutor(max_workers=PDF_WORKERS) as pool:
+            futures = {pool.submit(_enrich_edital, e): e for e in to_fetch}
+            for future in as_completed(futures):
+                future.result()
 
         stats = editais_repo.upsert_many(editais)
         runs_repo.finish(
@@ -148,6 +219,8 @@ def run_and_persist() -> RunResult:
 def run(output_path: Path) -> int:
     html = fetch_html(CAPES_URL)
     editais = parse_capes_open_editais(html)
+    for edital in editais:
+        _enrich_edital(edital)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
         json.dumps([asdict(e) for e in editais], ensure_ascii=False, indent=2),

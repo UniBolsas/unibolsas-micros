@@ -3,7 +3,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from scrapers.funcap.scraper import extract_end_date_from_pdf, run
+from scrapers.funcap.scraper import run
+from shared.pdf import extract_end_date_from_pdf
 
 # TODO: adicionar testes com PDFs reais da FUNCAP como fixtures para medir:
 # - precisão: data retornada está certa?
@@ -23,7 +24,7 @@ def test_tempo_scraping_funcap(tmp_path):
 def _fake_pdf(lines: list[str]) -> bytes:
     page = MagicMock()
     page.extract_text.return_value = "\n".join(lines)
-    with patch("scrapers.funcap.scraper.PdfReader") as mock_reader:
+    with patch("shared.pdf.PdfReader") as mock_reader:
         mock_reader.return_value.pages = [page]
         return mock_reader
 
@@ -31,7 +32,7 @@ def _fake_pdf(lines: list[str]) -> bytes:
 def _run(lines: list[str]):
     page = MagicMock()
     page.extract_text.return_value = "\n".join(lines)
-    with patch("scrapers.funcap.scraper.PdfReader") as mock_reader:
+    with patch("shared.pdf.PdfReader") as mock_reader:
         mock_reader.return_value.pages = [page]
         return extract_end_date_from_pdf(b"fake")
 
