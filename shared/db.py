@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any, Iterable
 
@@ -133,4 +133,12 @@ class ScrapeRunsRepository:
         return self.collection.find_one(
             {"institution": institution},
             sort=[("started_at", DESCENDING)],
+        )
+
+    def list_recent(
+        self, limit: int = 20, institution: str | None = None
+    ) -> list[dict[str, Any]]:
+        query = {"institution": institution.lower()} if institution else {}
+        return list(
+            self.collection.find(query).sort("started_at", DESCENDING).limit(limit)
         )
