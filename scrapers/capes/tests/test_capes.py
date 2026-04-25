@@ -1,4 +1,4 @@
-from scrapers.capes.scraper import parse_capes_open_editais
+from scrapers.capes.scraper import _find_edital_pdf_candidates, parse_capes_open_editais
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +169,102 @@ def test_titulo_normaliza_espacos():
     html = _make_html([{"href": "https://www.gov.br/capes/teste", "title": "  Título   com   espaços  "}])
     result = parse_capes_open_editais(html)
     assert result[0].title == "TÍTULO COM ESPAÇOS"
+
+
+# ---------------------------------------------------------------------------
+# _find_edital_pdf_candidates
+# ---------------------------------------------------------------------------
+
+def _pdf_link(href: str, text: str) -> str:
+    return f'<a href="{href}">{text}</a>'
+
+
+def _page_html(*links: str) -> str:
+    body = "".join(links)
+    return f"<html><body>{body}</body></html>"
+
+
+_EDITAL_HREF = "https://www.gov.br/capes/pt-br/centrais-de-conteudo/editais/13042026_Edital_001.pdf"
+_EDITAL_HREF_OLD = "https://www.gov.br/capes/pt-br/centrais-de-conteudo/editais/01042026_Edital_002.pdf"
+_RESULT_HREF = "https://www.gov.br/capes/pt-br/centrais-de-conteudo/resultados-dos-editais/13042026_Resultado.pdf"
+_MANUAL_HREF = "https://www.gov.br/capes/pt-br/centrais-de-conteudo/documentos/manual-cartao.pdf"
+
+
+def test_find_pdf_retorna_vazio_sem_links():
+    assert _find_edital_pdf_candidates("<html><body></body></html>") == []
+
+
+def test_find_pdf_retorna_vazio_sem_candidatos():
+    html = _page_html(
+        _pdf_link(_RESULT_HREF, "Resultado Final do Edital nº 09/2025"),
+        _pdf_link(_MANUAL_HREF, "Manual Cartão Pesquisador"),
+    )
+    assert _find_edital_pdf_candidates(html) == []
+
+
+def test_find_pdf_ignora_resultados_dos_editais():
+    html = _page_html(_pdf_link(_RESULT_HREF, "Edital nº 09/2025 - resultado"))
+    assert _find_edital_pdf_candidates(html) == []
+
+
+def test_find_pdf_ignora_negativo_resultado():
+    html = _page_html(_pdf_link(_EDITAL_HREF, "Resultado Final do Edital nº 09/2025"))
+    assert _find_edital_pdf_candidates(html) == []
+
+
+def test_find_pdf_ignora_negativo_lista():
+    html = _page_html(_pdf_link(_EDITAL_HREF, "Lista de inscritos do Edital nº 9/2025"))
+    assert _find_edital_pdf_candidates(html) == []
+
+
+def test_find_pdf_ignora_negativo_anexo():
+    html = _page_html(_pdf_link(_EDITAL_HREF, "Anexo I - Termo de Outorga"))
+    assert _find_edital_pdf_candidates(html) == []
+
+
+def test_find_pdf_ignora_negativo_modelo():
+    html = _page_html(_pdf_link(_EDITAL_HREF, "Modelo de Projeto do Edital nº 9/2025"))
+    assert _find_edital_pdf_candidates(html) == []
+
+
+def test_find_pdf_ignora_sem_texto_edital():
+    html = _page_html(_pdf_link(_EDITAL_HREF, "Chamamento Público nº 01/2026"))
+    assert _find_edital_pdf_candidates(html) == []
+
+
+def test_find_pdf_retorna_edital_simples():
+    html = _page_html(_pdf_link(_EDITAL_HREF, "Edital nº 08/2026 - CAPES/DAAD Probral"))
+    assert _find_edital_pdf_candidates(html) == [_EDITAL_HREF]
+
+
+def test_find_pdf_retorna_alteracao_de_edital():
+    html = _page_html(_pdf_link(_EDITAL_HREF, "Alteração do Edital nº 08/2026"))
+    assert _find_edital_pdf_candidates(html) == [_EDITAL_HREF]
+
+
+def test_find_pdf_retorna_mais_recente_primeiro():
+    """Lista deve ter o mais recente primeiro (data de arquivo desc)."""
+    html = _page_html(
+        _pdf_link(_EDITAL_HREF_OLD, "Edital nº 08/2026 - CAPES/DAAD Probral, pdf"),
+        _pdf_link(_EDITAL_HREF, "Alteração do Edital nº 08/2026, pdf"),
+    )
+    result = _find_edital_pdf_candidates(html)
+    assert result[0] == _EDITAL_HREF
+    assert result[1] == _EDITAL_HREF_OLD
+
+
+def test_find_pdf_desduplicar_href():
+    """Link duplicado não deve duplicar candidatos."""
+    html = _page_html(
+        _pdf_link(_EDITAL_HREF, "Edital nº 08/2026"),
+        _pdf_link(_EDITAL_HREF, "Edital nº 08/2026 (cópia)"),
+    )
+    assert _find_edital_pdf_candidates(html) == [_EDITAL_HREF]
+
+
+def test_find_pdf_ignora_nao_pdf():
+    html = _page_html('<a href="https://www.gov.br/capes/pagina">Edital nº 08/2026</a>')
+    assert _find_edital_pdf_candidates(html) == []
 
 
 # ---------------------------------------------------------------------------

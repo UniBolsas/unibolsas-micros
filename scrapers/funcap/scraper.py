@@ -18,81 +18,13 @@ from pypdf import PdfReader
 
 from shared.db import EditaisRepository, ScrapeRunsRepository
 from shared.models import Edital
+from shared.pdf import fetch_pdf_bytes, extract_end_date_from_pdf
 from shared.scraping import RunResult, build_id, fetch_html, listing_hash
 from shared.urls import FUNCAP_URL
 
 logger = logging.getLogger("unibolsas.scraper.funcap")
 INSTITUTION = "funcap"
 PDF_WORKERS = 8
-
-DATE_RE = re.compile(r"\b(\d{1,2}/\d{1,2}/\d{4})\b")
-
-KEYWORDS_HIGH = ("inscri", "submiss", "data limite", "encerr")
-KEYWORDS_LOW = ("prazo", "final")
-
-NEGATIVE_HINTS = (
-    "anteriores",
-    "meses anteriores",
-    "últimos 12 meses",
-    "ultimos 12 meses",
-    "resultado",
-    "recurso",
-    "homologaç",
-    "divulgaç",
-    "publicaç",
-    "julgament",
-)
-
-
-def fetch_pdf_bytes(url: str) -> bytes:
-    with httpx.Client(timeout=45.0, follow_redirects=True) as client:
-        response = client.get(url, headers={"User-Agent": "Mozilla/5.0"})
-        response.raise_for_status()
-        return response.content
-
-
-def _normalize_date(raw: str) -> str | None:
-    try:
-        return datetime.strptime(raw, "%d/%m/%Y").date().isoformat()
-    except ValueError:
-        return None
-
-
-def extract_end_date_from_pdf(pdf_bytes: bytes) -> tuple[str | None, str | None]:
-    try:
-        reader = PdfReader(BytesIO(pdf_bytes))
-    except Exception:
-        return None, None
-
-    today = datetime.now(UTC).date()
-
-    lines: list[str] = []
-    for page in reader.pages:
-        text = page.extract_text() or ""
-        lines.extend(line.strip() for line in text.splitlines() if line.strip())
-
-    def _scan(keyword_set: tuple[str, ...]) -> tuple[str, str] | None:
-        best_future: tuple[str, str] | None = None
-        for line in lines:
-            low = line.lower()
-            if any(h in low for h in NEGATIVE_HINTS):
-                continue
-            if not any(k in low for k in keyword_set):
-                continue
-            all_dates = DATE_RE.findall(line)
-            if not all_dates:
-                continue
-            iso = _normalize_date(all_dates[-1])
-            if not iso:
-                continue
-            parsed = date_type.fromisoformat(iso)
-            if parsed >= today:
-                if best_future is None or iso < best_future[0]:
-                    best_future = (iso, line[:240])
-        return best_future
-
-    found = _scan(KEYWORDS_HIGH) or _scan(KEYWORDS_LOW)
-    return (found[0], found[1]) if found else (None, None)
 
 
 def parse_funcap_open_editais(html: str) -> list[Edital]:
