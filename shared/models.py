@@ -14,10 +14,9 @@ class Edital:
         pdf_url: URL para o PDF do edital.
         institution: Nome da instituição responsável.
         status: Status atual do edital (e.g. "aberto", "encerrado").
-        captured_at: Data e hora em que o edital foi capturado.
-        registration_deadline: Data limite para inscrições, se disponível.
-        registration_deadline_context: Trecho ou contexto de onde a data de
-            encerramento foi extraída.
+        captured_at: Timestamp ISO 8601 de quando o edital foi capturado (e.g. "2026-04-25T20:39:40Z").
+        registration_deadline: Data limite para inscrições no formato ISO 8601 (e.g. "2026-05-12"), se encontrada.
+        registration_deadline_context: Trecho do PDF de onde a data limite foi extraída.
     """
 
     id: str
@@ -25,8 +24,8 @@ class Edital:
     pdf_url: str
     institution: str
     status: str
-    captured_at: datetime
-    registration_deadline: datetime | None = None
+    captured_at: str
+    registration_deadline: str | None = None
     registration_deadline_context: str | None = None
 
     @staticmethod

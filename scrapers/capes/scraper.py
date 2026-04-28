@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 from pathlib import Path
@@ -19,12 +20,11 @@ logger = logging.getLogger("unibolsas.scraper.capes")
 INSTITUTION = "capes"
 PDF_WORKERS = 8
 
-_PDF_POSITIVE = ("edital",)
+_PDF_POSITIVE = ("edital", "chamamento", "premio")
 _PDF_NEGATIVE = (
-    "resultado", "lista", "relação", "relacao",
-    "renovação", "renovacao", "manual", "cartão", "cartao",
-    "anexo", "modelo", "declaração", "declaracao", "termo",
-    "retificação", "retificacao",
+    "resultado", "lista", "relacao", "renovacao",
+    "manual", "cartao", "anexo", "modelo",
+    "declaracao", "termo", "retificacao",
 )
 _RESULT_PATH = "/resultados-dos-editais/"
 _DATE_PREFIX_RE = re.compile(r"^(\d{2})(\d{2})(\d{4})_")
@@ -109,7 +109,7 @@ def _find_edital_pdf_candidates(html: str) -> list[str]:
         if href in seen:
             continue
 
-        text = a.get_text(" ", strip=True).lower()
+        text = unicodedata.normalize("NFD", a.get_text(" ", strip=True)).encode("ascii", "ignore").decode().lower()
         if not any(kw in text for kw in _PDF_POSITIVE):
             continue
         if any(kw in text for kw in _PDF_NEGATIVE):
@@ -219,8 +219,10 @@ def run_and_persist() -> RunResult:
 def run(output_path: Path) -> int:
     html = fetch_html(CAPES_URL)
     editais = parse_capes_open_editais(html)
-    for edital in editais:
-        _enrich_edital(edital)
+    with ThreadPoolExecutor(max_workers=PDF_WORKERS) as pool:
+        futures = {pool.submit(_enrich_edital, e): e for e in editais}
+        for future in as_completed(futures):
+            future.result()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
         json.dumps([asdict(e) for e in editais], ensure_ascii=False, indent=2),

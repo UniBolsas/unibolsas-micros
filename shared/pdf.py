@@ -98,21 +98,22 @@ def extract_end_date_from_pdf(pdf_bytes: bytes) -> tuple[str | None, str | None]
         lines.extend(line.strip() for line in text.splitlines() if line.strip())
 
     def _scan(keyword_set: tuple[str, ...]) -> tuple[str, str] | None:
-        best_future: tuple[str, str] | None = None
-        for i, line in enumerate(lines):
+        earliest_future: tuple[str, str] | None = None
+        for keyword_idx, line in enumerate(lines):
             low = line.lower()
-            if any(h in low for h in NEGATIVE_HINTS):
+            if any(hint in low for hint in NEGATIVE_HINTS):
                 continue
-            if not any(k in low for k in keyword_set):
+            if not any(keyword in low for keyword in keyword_set):
                 continue
-            # Keyword encontrada — buscar data na linha e nas próximas _LOOKAHEAD linhas
-            block = " ".join(lines[i: i + _LOOKAHEAD + 1])
-            for iso in _find_dates(block):
-                parsed = date_type.fromisoformat(iso)
-                if parsed >= today:
-                    if best_future is None or iso < best_future[0]:
-                        best_future = (iso, block[:240])
-        return best_future
+            lookahead_end = min(keyword_idx + _LOOKAHEAD + 1, len(lines))
+            for date_idx in range(keyword_idx, lookahead_end):
+                for iso in _find_dates(lines[date_idx]):
+                    parsed = date_type.fromisoformat(iso)
+                    if parsed >= today:
+                        if earliest_future is None or iso < earliest_future[0]:
+                            ctx = " ".join(lines[keyword_idx: date_idx + 2])
+                            earliest_future = (iso, ctx[:240])
+        return earliest_future
 
     found = _scan(KEYWORDS_HIGH) or _scan(KEYWORDS_LOW)
     return (found[0], found[1]) if found else (None, None)

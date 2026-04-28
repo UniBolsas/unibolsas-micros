@@ -227,8 +227,8 @@ def test_find_pdf_ignora_negativo_modelo():
     assert _find_edital_pdf_candidates(html) == []
 
 
-def test_find_pdf_ignora_sem_texto_edital():
-    html = _page_html(_pdf_link(_EDITAL_HREF, "Chamamento Público nº 01/2026"))
+def test_find_pdf_ignora_sem_texto_relevante():
+    html = _page_html(_pdf_link(_EDITAL_HREF, "Relatório de Atividades nº 01/2026"))
     assert _find_edital_pdf_candidates(html) == []
 
 
@@ -265,6 +265,16 @@ def test_find_pdf_desduplicar_href():
 def test_find_pdf_ignora_nao_pdf():
     html = _page_html('<a href="https://www.gov.br/capes/pagina">Edital nº 08/2026</a>')
     assert _find_edital_pdf_candidates(html) == []
+
+
+def test_find_pdf_aceita_chamamento():
+    html = _page_html(_pdf_link(_EDITAL_HREF, "Chamamento Público nº 01/2026"))
+    assert _find_edital_pdf_candidates(html) == [_EDITAL_HREF]
+
+
+def test_find_pdf_aceita_premio():
+    html = _page_html(_pdf_link(_EDITAL_HREF, "Prêmio CAPES de Tese 2026"))
+    assert _find_edital_pdf_candidates(html) == [_EDITAL_HREF]
 
 
 # ---------------------------------------------------------------------------
