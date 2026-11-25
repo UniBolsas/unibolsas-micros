@@ -9,12 +9,12 @@ O workflow está definido em `.github/workflows/scrape.yml`.
 ## Como funciona (visão geral)
 
 1. O GitHub Actions roda no horário agendado (`cron: "0 */6 * * *"` = a cada 6h UTC).
-2. Ele executa um único `curl`: `POST https://SEU-APP.onrender.com/scrape/run` com o header `X-Scrape-Token: <token>`.
+2. Ele executa `scripts/trigger_scrape.py`, que acorda o servidor com `GET /health` e faz um único `POST https://SEU-APP.onrender.com/scrape/run` com o header `X-Scrape-Token: <token>`.
 3. Essa chamada:
    - Acorda a app no Render (cold start de ~30s na primeira vez).
    - A app valida o token.
    - Se o token bate, ela agenda **todos os scrapers registrados** (FUNCAP, e no futuro CAPES, CNPq…) como _background tasks_ e responde `200 {"status": "scheduled"}` imediatamente.
-   - O `curl` termina rápido (não precisa esperar o scraping acabar), e os scrapers continuam rodando em segundo plano até concluir.
+   - O script consulta `GET /scrape/status` até todos terminarem (cerca de 10 min no máximo) e publica uma tabela no resumo do run. O job falha se algum scraper der erro ou não terminar, e avisa quando vier 0 editais.
 4. Resultados vão para o MongoDB; status de cada run vai para a coleção `scrape_runs`; você pode inspecionar em `GET /scrape` (HTML) ou `GET /scrape/status` (JSON).
 
 ---
@@ -88,7 +88,7 @@ O workflow tem `workflow_dispatch`, então dá para rodar sem esperar o cron.
 3. Clique em **Run workflow** → **Run workflow**.
 4. Espere o job rodar (uns 10-30s dependendo do cold start do Render).
 5. Verifique:
-   - O log do step "Trigger all scrapers" deve mostrar o curl respondendo com `{"status":"scheduled",...}`.
+   - O log do step "Run scrapers and report" deve mostrar a tabela com o resultado de cada instituição.
    - Abra `https://SEU-APP.onrender.com/scrape` no navegador — a tabela deve mostrar a última run.
    - Ou abra `https://SEU-APP.onrender.com/scrape/status` para ver o JSON.
 
@@ -143,6 +143,7 @@ A ideia do refator é que você **não precisa mexer no workflow** nem nas rotas
 ## Solução de problemas
 
 - **`401 invalid or missing token`**: os valores de `SCRAPE_TOKEN` no Render e no GitHub não batem. Gere de novo e reaplique nos dois lados.
-- **`curl: (28) Operation timed out`**: cold start do Render passou de 60s. Aumente `--max-time` no workflow ou mantenha o serviço aquecido com um ping a mais.
+- **`falha ao disparar o scraping: TimeoutError`**: o servidor não respondeu em 60s mesmo após as tentativas de `/health`. Veja os logs do Render antes de disparar de novo.
+- **O workflow parou de rodar sozinho**: o GitHub desativa agendamentos após 60 dias sem atividade no repositório. Religue na aba Actions ou com `gh workflow enable scrape`.
 - **Cron não dispara**: workflows agendados no GitHub Actions são pausados se o repo ficar 60 dias sem atividade. Qualquer push reativa.
 - **Quero ver os logs do scraping**: `GET /scrape/status` mostra status/erro da última run por instituição. Logs detalhados estão no stdout do Render (aba Logs).
