@@ -13,6 +13,9 @@ from pymongo.database import Database
 
 from shared.models import Edital
 
+STATUS_CLOSED = "fechado"
+_DEADLINE_FIELDS = ("registration_deadline", "registration_deadline_context")
+
 _client: MongoClient | None = None
 _db: Database | None = None
 
@@ -72,15 +75,23 @@ class EditaisRepository:
         return {doc["_id"] for doc in cursor}
 
     def upsert_many(self, editais: list[Edital]) -> UpsertStats:
+        """Insere ou atualiza. Sem prazo novo, preserva o prazo já salvo."""
         stats = UpsertStats()
         now = _now().isoformat(timespec="seconds").replace("+00:00", "Z")
         for edital in editais:
-            doc = asdict(edital)
-            doc.pop("id", None)
-            doc["last_seen_at"] = now
+            fields = {k: v for k, v in asdict(edital).items() if k != "id"}
+            # prazo e contexto andam juntos: ou atualiza os dois, ou nenhum
+            insert_only = (
+                _DEADLINE_FIELDS if edital.registration_deadline is None else ()
+            )
+            on_update = {k: v for k, v in fields.items() if k not in insert_only}
+            on_insert = {k: fields[k] for k in insert_only}
             result = self.collection.update_one(
                 {"_id": edital.id},
-                {"$set": doc, "$setOnInsert": {"first_seen_at": now}},
+                {
+                    "$set": {**on_update, "last_seen_at": now},
+                    "$setOnInsert": {**on_insert, "first_seen_at": now},
+                },
                 upsert=True,
             )
             if result.upserted_id is not None:
@@ -88,6 +99,14 @@ class EditaisRepository:
             elif result.modified_count:
                 stats.updated += 1
         return stats
+
+    def close_missing(self, open_ids: Iterable[str]) -> int:
+        """Marca como fechado todo edital fora da listagem de abertos."""
+        result = self.collection.update_many(
+            {"_id": {"$nin": list(open_ids)}, "status": {"$ne": STATUS_CLOSED}},
+            {"$set": {"status": STATUS_CLOSED}},
+        )
+        return result.modified_count
 
     def list_recent(self, limit: int = 50) -> list[dict[str, Any]]:
         return list(

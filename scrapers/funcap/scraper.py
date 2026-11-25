@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 
 import httpx
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 from pypdf import PdfReader
 
 from shared.db import EditaisRepository, ScrapeRunsRepository
@@ -25,18 +25,34 @@ from shared.urls import FUNCAP_URL
 logger = logging.getLogger("unibolsas.scraper.funcap")
 INSTITUTION = "funcap"
 PDF_WORKERS = 8
+OPEN_HEADING = "Editais Abertos"
+_HEADING_TAGS = ("h1", "h2", "h3", "h4", "h5", "h6")
+
+
+class ListingNotFoundError(RuntimeError):
+    """A página da FUNCAP não tem a seção de editais abertos esperada."""
+
+
+def _find_open_panel(soup: BeautifulSoup) -> Tag:
+    heading = soup.find(
+        lambda t: t.name in _HEADING_TAGS and OPEN_HEADING in t.get_text()
+    )
+    panel = heading and heading.find_next("div", class_="ui-tabs-panel")
+    if not isinstance(panel, Tag):
+        raise ListingNotFoundError(f"seção '{OPEN_HEADING}' não encontrada")
+
+    # Sem o painel de abertos, o próximo da página é o de encerrados.
+    owner = panel.find_previous(
+        lambda t: t.name in _HEADING_TAGS and "Editais" in t.get_text()
+    )
+    if owner is not heading:
+        raise ListingNotFoundError(f"painel não pertence a '{OPEN_HEADING}'")
+    return panel
 
 
 def parse_funcap_open_editais(html: str) -> list[Edital]:
     soup = BeautifulSoup(html, "lxml")
-    start_header = soup.find(string=lambda s: isinstance(s, str)
-                             and "Editais Abertos" in s)
-    if start_header is None:
-        return []
-
-    panel = start_header.parent.find_next("div", class_="ui-tabs-panel")
-    if panel is None:
-        return []
+    panel = _find_open_panel(soup)
 
     captured_at = Edital.now_iso()
     seen_urls: set[str] = set()
@@ -108,6 +124,8 @@ def run_and_persist() -> RunResult:
 
         last = runs_repo.get_last(INSTITUTION)
         all_ids = [e.id for e in editais]
+        closed = editais_repo.close_missing(all_ids)
+        logger.info("FUNCAP fechou %d editais fora da listagem", closed)
         existing_complete = editais_repo.get_existing_complete_ids(all_ids)
 
         unchanged = (
